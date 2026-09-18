@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>4-in-1 Photo Grid PDF Generator</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: #f4f6f8; margin: 0; padding: 16px; color: #222; }
+    .card { max-width: 540px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    h1 { font-size: 1.3rem; margin-top: 0; text-align: center; color: #0f172a; }
+    p.desc { font-size: 0.85rem; color: #64748b; text-align: center; margin-bottom: 20px; }
+    .upload-area { border: 2px dashed #3b82f6; border-radius: 10px; padding: 24px 16px; text-align: center; background: #eff6ff; cursor: pointer; margin-bottom: 16px; }
+    .upload-area input { display: none; }
+    .upload-label { font-weight: 600; color: #1d4ed8; font-size: 0.95rem; cursor: pointer; }
+    .options { margin-bottom: 16px; font-size: 0.85rem; }
+    .options label { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer; }
+    .btn { width: 100%; padding: 14px; background: #2563eb; color: #fff; border: none; border-radius: 8px; font-size: 1rem; font-weight: bold; cursor: pointer; margin-top: 8px; }
+    .btn:disabled { background: #94a3b8; cursor: not-allowed; }
+    .btn-share { background: #059669; display: none; }
+    #status { margin-top: 14px; font-size: 0.85rem; text-align: center; color: #334155; }
+    .progress-bar { width: 100%; height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; margin-top: 12px; display: none; }
+    .progress-fill { width: 0%; height: 100%; background: #2563eb; transition: width 0.2s; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h1>📄 4-in-1 Photo Batch to PDF</h1>
+  <p class="desc">Select all your pending photos at once. They will be formatted into print-ready A4 sheets automatically.</p>
+
+  <div class="upload-area" onclick="document.getElementById('fileInput').click()">
+    <div class="upload-label">📂 Tap Here to Select Photos</div>
+    <div id="fileCount" style="font-size: 0.8rem; color: #64748b; margin-top: 6px;">No photos selected</div>
+    <input type="file" id="fileInput" multiple accept="image/jpeg,image/png,image/webp">
+  </div>
+
+  <div class="options">
+    <label>
+      <input type="radio" name="layout" value="4" checked> 4 Photos per Sheet (2x2 Grid)
+    </label>
+    <label>
+      <input type="radio" name="layout" value="6"> 6 Photos per Sheet (2x3 Grid)
+    </label>
+    <label>
+      <input type="checkbox" id="drawBorders" checked> Draw faint cutting borders around photos
+    </label>
+    <label>
+      <input type="checkbox" id="autoRotate" checked> Auto-rotate wide photos to maximize size
+    </label>
+  </div>
+
+  <button id="processBtn" class="btn" disabled>Generate Printable PDF</button>
+  <button id="shareBtn" class="btn btn-share">🔗 Open / Share with Printer App</button>
+
+  <div class="progress-bar" id="progressBar">
+    <div class="progress-fill" id="progressFill"></div>
+  </div>
+  <div id="status"></div>
+</div>
+
+<script>
+  const fileInput = document.getElementById('fileInput');
+  const fileCount = document.getElementById('fileCount');
+  const processBtn = document.getElementById('processBtn');
+  const shareBtn = document.getElementById('shareBtn');
+  const statusDiv = document.getElementById('status');
+  const progressBar = document.getElementById('progressBar');
+  const progressFill = document.getElementById('progressFill');
+
+  let selectedFiles = [];
+  let generatedPdfBlob = null;
+
+  fileInput.addEventListener('change', (e) => {
+    selectedFiles = Array.from(e.target.files);
+    if (selectedFiles.length > 0) {
+      fileCount.innerText = `${selectedFiles.length} photos ready for processing`;
+      processBtn.disabled = false;
+      shareBtn.style.display = 'none';
+      statusDiv.innerText = '';
+    } else {
+      fileCount.innerText = 'No photos selected';
+      processBtn.disabled = true;
+    }
+  });
+
+  processBtn.addEventListener('click', async () => {
+    processBtn.disabled = true;
+    progressBar.style.display = 'block';
+    progressFill.style.width = '0%';
+    statusDiv.innerText = 'Processing photos...';
+
+    const layout = parseInt(document.querySelector('input[name="layout"]:checked').value);
+    const drawBorders = document.getElementById('drawBorders').checked;
+    const autoRotate = document.getElementById('autoRotate').checked;
+
+    const cols = 2;
+    const rows = layout === 4 ? 2 : 3;
+    const perPage = cols * rows;
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+    const pageWidth = 210;
+    const pageHeight = 297;
+    const margin = 8;
+    const spacing = 5;
+
+    const cellWidth = (pageWidth - (2 * margin) - ((cols - 1) * spacing)) / cols;
+    const cellHeight = (pageHeight - (2 * margin) - ((rows - 1) * spacing)) / rows;
+
+    for (let i = 0; i < selectedFiles.length; i++) {
+      const slot = i % perPage;
+      const col = slot % cols;
+      const row = Math.floor(slot / cols);
+
+      const cellX = margin + col * (cellWidth + spacing);
+      const cellY = margin + row * (cellHeight + spacing);
+
+      const file = selectedFiles[i];
+      const imgBitmap = await createImageBitmap(file);
+
+      // Render image to canvas to normalize orientation & dimensions
+      let srcW = imgBitmap.width;
+      let srcH = imgBitmap.height;
+      let rotate = false;
+
+      if (autoRotate && srcW > srcH && cellHeight > cellWidth) {
+        rotate = true;
+      }
+
+      const offCanvas = document.createElement('canvas');
+      const ctx = offCanvas.getContext('2d');
+
+      if (rotate) {
+        offCanvas.width = srcH;
+        offCanvas.height = srcW;
+        ctx.translate(srcH / 2, srcW / 2);
+        ctx.rotate(90 * Math.PI / 180);
+        ctx.drawImage(imgBitmap, -srcW / 2, -srcH / 2);
+      } else {
+        offCanvas.width = srcW;
+        offCanvas.height = srcH;
+        ctx.drawImage(imgBitmap, 0, 0);
+      }
+
+      // Proportional fitting
+      const effW = offCanvas.width;
+      const effH = offCanvas.height;
+      const scale = Math.min(cellWidth / effW, cellHeight / effH);
+      const drawW = effW * scale;
+      const drawH = effH * scale;
+      const posX = cellX + (cellWidth - drawW) / 2;
+      const posY = cellY + (cellHeight - drawH) / 2;
+
+      const imgDataUrl = offCanvas.toDataURL('image/jpeg', 0.82);
+      doc.addImage(imgDataUrl, 'JPEG', posX, posY, drawW, drawH);
+
+      if (drawBorders) {
+        doc.setDrawColor(210, 210, 210);
+        doc.setLineWidth(0.2);
+        doc.rect(posX, posY, drawW, drawH);
+      }
+
+      const percent = Math.round(((i + 1) / selectedFiles.length) * 100);
+      progressFill.style.width = `${percent}%`;
+      statusDiv.innerText = `Compiled ${i + 1} of ${selectedFiles.length} photos (${percent}%)`;
+
+      if (slot === perPage - 1 && i < selectedFiles.length - 1) {
+        doc.addPage();
+      }
+    }
+
+    generatedPdfBlob = doc.output('blob');
+    statusDiv.innerText = `Complete! Generated ${Math.ceil(selectedFiles.length / perPage)} A4 pages.`;
+    processBtn.disabled = false;
+
+    // Trigger immediate download
+    doc.save('photo_sheets_ready_to_print.pdf');
+
+    // Show native share button if supported (mobile browsers)
+    if (navigator.canShare && navigator.canShare({ files: [new File([generatedPdfBlob], 'print.pdf', { type: 'application/pdf' })] })) {
+      shareBtn.style.display = 'block';
+    }
+  });
+
+  shareBtn.addEventListener('click', async () => {
+    if (!generatedPdfBlob) return;
+    const file = new File([generatedPdfBlob], 'photo_sheets_ready_to_print.pdf', { type: 'application/pdf' });
+    try {
+      await navigator.share({
+        files: [file],
+        title: 'Print Photos',
+        text: 'Send directly to print service'
+      });
+    } catch (err) {
+      console.log('Share canceled or not supported');
+    }
+  });
+</script>
+
+</body>
+</html>
+
